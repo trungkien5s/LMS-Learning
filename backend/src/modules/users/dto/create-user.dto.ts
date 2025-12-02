@@ -1,19 +1,47 @@
-import { IsEmail, IsEmpty, IsNotEmpty } from "class-validator";
+import {
+  IsEmail,
+  IsString,
+  MinLength,
+  MaxLength,
+  IsOptional,
+  IsEnum,
+  Matches,
+} from 'class-validator';
+import { UserRole } from '../entities/user.entity';
 
 export class CreateUserDto {
-    @IsNotEmpty({message: "Tên không được để trống"})
-    name: string;
+  @IsString({ message: 'Tên phải là chuỗi ký tự' })
+  @MinLength(2, { message: 'Tên phải có ít nhất 2 ký tự' })
+  @MaxLength(255, { message: 'Tên không được vượt quá 255 ký tự' })
+  full_name: string;
 
-    @IsNotEmpty({message: "Email không được để trống"})
-    @IsEmail({},{message: "Email không đúng định dạng"})
-    email: string;
-    
-    @IsNotEmpty({message: "Mật khẩu không được để trống"})
-    password: string;
+  @IsEmail({}, { message: 'Email không hợp lệ' })
+  email: string;
 
-    @IsNotEmpty({message: "Số điện thoại không được để trống"})
-    phone: string;
+  @IsString()
+  @MinLength(8, { message: 'Mật khẩu phải có ít nhất 8 ký tự' })
+  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/, {
+    message: 'Mật khẩu phải chứa ít nhất 1 chữ hoa, 1 chữ thường và 1 số',
+  })
+  password: string;
 
-    address: string;
-    image: string;    
+  @IsOptional()
+  @IsString()
+  @Matches(/^[0-9]{10,11}$/, { message: 'Số điện thoại không hợp lệ' })
+  phone?: string;
+
+  @IsOptional()
+  @IsString()
+  address?: string;
+
+  @IsOptional()
+  @IsString()
+  avatar_url?: string;
+
+    @IsOptional()
+  @IsEnum(UserRole)
+  role?: UserRole;   // chỉ admin được gán
+
+  // ⚠️ Role được gán tự động ở service, không cho user tự chọn
+  // Nếu cần tạo teacher/admin, dùng endpoint riêng cho admin
 }

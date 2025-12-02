@@ -1,6 +1,4 @@
 // src/auth/auth.service.ts
-import { comparePasswordHelper } from '@/helpers/util';
-import { UsersService } from '@/modules/users/users.service';
 import {
   Injectable,
   UnauthorizedException,
@@ -8,55 +6,118 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { CreateAuthDto } from './dto/create-auth.dto';
-import { MailerService } from '@nestjs-modules/mailer';
 import { randomBytes } from 'crypto';
+import { MailerService } from '@nestjs-modules/mailer';
+
+import { comparePasswordHelper } from '@/helpers/util';
+import { UsersService } from '@/modules/users/users.service';
+import { CreateAuthDto } from './dto/create-auth.dto';
+import { User, UserRole } from '@/modules/users/entities/user.entity';
+
+export interface JwtPayload {
+  sub: string;
+  role: UserRole;
+  username: string; // email
+}
+
+export interface LoginUserPayload {
+  _id: string;
+  email: string;
+  name: string;
+  role: UserRole;
+}
+
+export interface LoginResult {
+  user: LoginUserPayload;
+  access_token: string;
+  refresh_token: string;
+}
+
+export interface RefreshTokenResult {
+  access_token: string;
+}
+
+interface LogoutInput {
+  id?: string;
+  _id?: string;
+  sub?: string;
+  email?: string;
+  username?: string;
+}
+
+export interface LogoutResult {
+  message: string;
+  statusCode: number;
+  data: {
+    userId: string;
+    email?: string;
+    logoutTime: string;
+  };
+}
 
 @Injectable()
 export class AuthService {
   constructor(
-    private usersService: UsersService,
-    private jwtService: JwtService,
-    private mailerService: MailerService,
+    private readonly usersService: UsersService,
+    private readonly jwtService: JwtService,
+    private readonly mailerService: MailerService,
   ) {}
 
-  async validateUser(username: string, pass: string): Promise<any> {
+  // =====================================================
+  // LOCAL STRATEGY: validate user (email + password)
+  // =====================================================
+  async validateUser(
+    username: string,
+    pass: string,
+  ): Promise<User | null> {
     const user = await this.usersService.findByEmail(username);
     if (!user) return null;
 
-    const isValidPassword = await comparePasswordHelper(pass, user.password);
+    const isValidPassword = await comparePasswordHelper(
+      pass,
+      user.password_hash,
+    );
     if (!isValidPassword) return null;
 
     return user;
   }
 
-  async login(user: any) {
-    if (!user.isActive) {
+  // =====================================================
+  // LOGIN
+  // =====================================================
+  async login(user: User): Promise<LoginResult> {
+    if (!user.is_active) {
       throw new BadRequestException('Tài khoản chưa được kích hoạt.');
     }
 
-    const payload = {
+    const payload: JwtPayload = {
       username: user.email,
-      sub: user.id, // ✅ TypeORM: dùng id
+      sub: user.id,
       role: user.role,
     };
+
     const accessToken = this.jwtService.sign(payload, {
       expiresIn: process.env.JWT_ACCESS_TOKEN_EXPIRED || '30m',
     });
 
     // Tạo refresh token random
     const refreshToken = randomBytes(64).toString('hex');
-    const refreshTokenExpiry = new Date();
-    refreshTokenExpiry.setDate(refreshTokenExpiry.getDate() + 7);
+    const refreshTokenExpiry = new Date(
+      Date.now() + 7 * 24 * 60 * 60 * 1000,
+    ); // 7 ngày
 
     // Lưu refreshToken vào DB
-    await this.usersService.saveRefreshToken(user.id, refreshToken, refreshTokenExpiry);
+    await this.usersService.saveRefreshToken(
+      user.id,
+      refreshToken,
+      refreshTokenExpiry,
+    );
 
     return {
       user: {
-        _id: user.id, // nếu FE đang dùng _id thì map từ id
+        _id: user.id,
         email: user.email,
-        name: user.name,
+        name: user.full_name,
         role: user.role,
       },
       access_token: accessToken,
@@ -64,62 +125,93 @@ export class AuthService {
     };
   }
 
-  async refreshToken(userId: string, refreshToken: string) {
-    // Kiểm tra refresh token trong DB
+  // =====================================================
+  // REFRESH TOKEN
+  // =====================================================
+  async refreshToken(
+    userId: string,
+    refreshToken: string,
+  ): Promise<RefreshTokenResult> {
     const user = await this.usersService.findById(userId);
+
     if (
       !user ||
-      !user.refreshToken ||
-      user.refreshToken !== refreshToken ||
-      !user.refreshTokenExpiry ||
-      new Date() > new Date(user.refreshTokenExpiry)
+      !user.refresh_token ||
+      user.refresh_token !== refreshToken ||
+      !user.refresh_token_expiry ||
+      new Date() > new Date(user.refresh_token_expiry)
     ) {
       throw new UnauthorizedException(
         'Refresh token không hợp lệ hoặc đã hết hạn.',
       );
     }
 
-    const payload = {
+    const payload: JwtPayload = {
       username: user.email,
       sub: user.id,
       role: user.role,
     };
+
     const accessToken = this.jwtService.sign(payload, {
       expiresIn: process.env.JWT_ACCESS_TOKEN_EXPIRED || '30m',
     });
+
     return { access_token: accessToken };
   }
 
-  // Nếu UsersService.handleRegister đã có (như trên) thì đoạn fallback này sẽ không chạy.
-  // Bạn có thể xoá fallback nếu muốn, nhưng để nguyên cũng không sao.
-  async handleRegister(registerDto: CreateAuthDto) {
-    if (typeof this.usersService.handleRegister === 'function') {
-      return await this.usersService.handleRegister(registerDto);
+  // =====================================================
+  // REGISTER (uỷ quyền cho UsersService.handleRegister)
+  // =====================================================
+  async handleRegister(
+    registerDto: CreateAuthDto,
+  ): Promise<{ _id: string }> {
+    return this.usersService.handleRegister(registerDto);
+  }
+
+  // =====================================================
+  // ACTIVATE ACCOUNT
+  // =====================================================
+  async activateAccountByToken(
+    token: string,
+  ): Promise<{ message: string }> {
+    const user = await this.usersService.findByActivationToken(token);
+    if (!user) {
+      throw new BadRequestException(
+        'Invalid or expired activation token',
+      );
     }
 
-    // Fallback: dùng activation token kiểu link
-    const existing = await this.usersService.findByEmail(registerDto.email);
-    if (existing) {
-      throw new BadRequestException('Email already exists');
+    if (
+      user.activation_token_expiry &&
+      user.activation_token_expiry < new Date()
+    ) {
+      throw new BadRequestException(
+        'Activation token has expired. Please request a new one.',
+      );
     }
 
-    const createUserPayload = {
-      name: registerDto.name,
-      email: registerDto.email,
-      password: registerDto.password,
-      phone: (registerDto as any).phone ?? '',
-      address: (registerDto as any).address ?? '',
-      image: (registerDto as any).image ?? '',
-    } as any;
+    await this.usersService.activateUser(user.id);
 
-    const created = await this.usersService.create(createUserPayload);
+    return {
+      message: 'Account activated successfully! You can now login.',
+    };
+  }
 
-    const userId =
-      created && created._id
-        ? typeof created._id.toString === 'function'
-          ? created._id.toString()
-          : String(created._id)
-        : String(created);
+  // =====================================================
+  // RESEND ACTIVATION LINK
+  // =====================================================
+  async resendActivationLink(
+    email: string,
+  ): Promise<{ message: string }> {
+    const user = await this.usersService.findByEmail(email);
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (user.is_active) {
+      throw new BadRequestException('Account is already activated');
+    }
 
     const activationToken = randomBytes(32).toString('hex');
     const activationTokenExpiry = new Date(
@@ -127,73 +219,41 @@ export class AuthService {
     ); // 24h
 
     await this.usersService.updateActivationToken(
-      userId,
-      activationToken,
-      activationTokenExpiry,
-    );
-
-    await this.sendActivationEmail(
-      registerDto.email,
-      registerDto.name,
-      activationToken,
-    );
-
-    return {
-      message:
-        'Registration successful! Please check your email to activate your account.',
-    };
-  }
-
-  async activateAccountByToken(token: string) {
-    const user = await this.usersService.findByActivationToken(token);
-    if (!user) {
-      throw new BadRequestException('Invalid or expired activation token');
-    }
-    await this.usersService.activateUser(user.id);
-    return { message: 'Account activated successfully! You can now login.' };
-  }
-
-  async resendActivationLink(email: string) {
-    const user = await this.usersService.findByEmail(email);
-
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    if (user.isActive) {
-      throw new BadRequestException('Account is already activated');
-    }
-
-    const activationToken = randomBytes(32).toString('hex');
-    const activationTokenExpiry = new Date(
-      Date.now() + 24 * 60 * 60 * 1000,
-    );
-
-    await this.usersService.updateActivationToken(
       user.id,
       activationToken,
       activationTokenExpiry,
     );
 
-    await this.sendActivationEmail(user.email, user.name, activationToken);
+    await this.sendActivationEmail(
+      user.email,
+      user.full_name ?? user.email,
+      activationToken,
+    );
 
     return {
-      message: 'Activation link resent successfully! Please check your email.',
+      message:
+        'Activation link resent successfully! Please check your email.',
     };
   }
 
+  // =====================================================
+  // SEND ACTIVATION EMAIL (private)
+  // =====================================================
   private async sendActivationEmail(
     email: string,
     name: string,
     token: string,
-  ) {
+  ): Promise<void> {
     const activationUrl = `${
-      process.env.FRONTEND_URL || process.env.BACKEND_URL || 'http://localhost:3000'
+      process.env.FRONTEND_URL ||
+      process.env.BACKEND_URL ||
+      'http://localhost:3000'
     }/auth/activate?token=${token}`;
+
     await this.mailerService.sendMail({
       to: email,
       subject: 'Activate Your Account',
-      template: 'activation', // đảm bảo có template này
+      template: 'activation',
       context: {
         name,
         activationUrl,
@@ -201,8 +261,15 @@ export class AuthService {
     });
   }
 
-  async logout(user: any) {
-    const userId = (user.id || user._id || user.sub) as string;
+  // =====================================================
+  // LOGOUT
+  // =====================================================
+  async logout(user: LogoutInput): Promise<LogoutResult> {
+    const userId = user.id ?? user._id ?? user.sub ?? '';
+
+    if (!userId) {
+      throw new BadRequestException('User ID is missing in token');
+    }
 
     await this.usersService.removeRefreshToken(userId);
 
@@ -211,7 +278,7 @@ export class AuthService {
       statusCode: 200,
       data: {
         userId,
-        email: user.email || user.username,
+        email: user.email ?? user.username,
         logoutTime: new Date().toISOString(),
       },
     };

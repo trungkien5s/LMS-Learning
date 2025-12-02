@@ -1,33 +1,55 @@
 // src/modules/users/users.service.ts
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { CreateAuthDto } from '@/auth/dto/create-auth.dto';
-import { UpdateUserDto } from './dto/update-user.dto';
-import { CreateUserDto } from './dto/create-user.dto';
+
 import { User } from './entities/user.entity';
-import { Injectable, BadRequestException } from '@nestjs/common';
-import { comparePasswordHelper, hashPasswordHelper } from '@/helpers/util';
-import aqp from 'api-query-params';
-import dayjs from 'dayjs';
-import { v4 as uuidv4 } from 'uuid';
+import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
+import { CreateAuthDto } from '@/auth/dto/create-auth.dto';
+
 import { MailerService } from '@nestjs-modules/mailer';
 import { randomBytes } from 'crypto';
+import dayjs from 'dayjs';
+import aqp from 'api-query-params';
+
+import {
+  hashPasswordHelper,
+  comparePasswordHelper,
+} from '@/helpers/util';
 
 @Injectable()
 export class UsersService {
   constructor(
     @InjectRepository(User)
-    private userRepository: Repository<User>,
+    private readonly userRepository: Repository<User>,
     private readonly mailerService: MailerService,
   ) {}
 
-  async isEmailExist(email: string) {
+  // ======================= COMMON HELPERS =======================
+
+  async isEmailExist(email: string): Promise<boolean> {
     const user = await this.userRepository.findOne({ where: { email } });
     return !!user;
   }
 
+  async findById(id: string): Promise<User | null> {
+    return this.userRepository.findOne({ where: { id } });
+  }
+
+  async findByEmail(email: string): Promise<User | null> {
+    return this.userRepository.findOne({ where: { email } });
+  }
+
+  // ========================== CRUD ==============================
+
   async create(dto: CreateUserDto) {
-    const { name, email, password, phone, address, image } = dto;
+    const { full_name, email, password, phone, address, avatar_url, role } =
+      dto;
 
     const isExist = await this.isEmailExist(email);
     if (isExist) {
@@ -35,50 +57,69 @@ export class UsersService {
     }
 
     const hashed = await hashPasswordHelper(password);
+
     const user = this.userRepository.create({
-      name,
+      full_name,
       email,
-      password: hashed,
+      password_hash: hashed,
       phone,
       address,
-      image,
+      avatar_url,
+      role,
     });
+
     await this.userRepository.save(user);
-    return { _id: user.id }; // FE vẫn dùng _id thì map từ id sang _id
+
+    return { _id: user.id };
   }
 
-  async findAll(query: string, current: number, pageSize: number, role?: string) {
-    const { filter, sort } = aqp(query || '');
+  async findAll(
+  query: string,
+  current: number,
+  pageSize: number,
+  role?: string,
+) {
+  const { filter, sort } = aqp(query || '');
 
-    const page = Number(current) || 1;
-    const size = Number(pageSize) || 10;
-    const skip = (page - 1) * size;
+  const page = Number(current) || 1;
+  const size = Number(pageSize) || 10;
+  const skip = (page - 1) * size;
 
-    const [results, total] = await this.userRepository.findAndCount({
-      where: role ? { role } : {},
-      skip,
-      take: size,
-      order: sort as any,
-    });
+  const where: Record<string, unknown> = { ...filter };
+  if (role) where.role = role;
 
-    return {
-      results,
-      totalPages: Math.ceil(total / size),
-    };
+  // ✅ map từ 1 / -1 → 'ASC' / 'DESC'
+  const order: Record<string, 'ASC' | 'DESC'> = {};
+  if (sort) {
+    Object.entries(sort as Record<string, number>).forEach(
+      ([key, value]) => {
+        if (value === 1) {
+          order[key] = 'ASC';
+        } else if (value === -1) {
+          order[key] = 'DESC';
+        }
+      },
+    );
   }
+
+  const [results, total] = await this.userRepository.findAndCount({
+    where,
+    skip,
+    take: size,
+    order, // 👈 dùng order đã chuyển kiểu
+  });
+
+  return {
+    results,
+    totalPages: Math.ceil(total / size),
+  };
+}
+
 
   async findOne(id: string) {
-    // nếu password đang @Column({ select: false }) thì findOne bình thường sẽ không có password
-    return await this.userRepository.findOne({
+    return this.userRepository.findOne({
       where: { id },
-      // nếu muốn loại password ra, có thể dùng select cụ thể các field khác
-      // select: ['id', 'name', 'email', 'phone', 'address', 'image', 'role', 'isActive'],
     });
-  }
-
-  // 👉 Thêm hàm findById để AuthService.refreshToken dùng
-  async findById(id: string) {
-    return await this.userRepository.findOne({ where: { id } });
   }
 
   async update(id: string, dto: UpdateUserDto) {
@@ -91,27 +132,27 @@ export class UsersService {
     return { message: 'Xoá thành công' };
   }
 
-  async findByEmail(email: string) {
-    return await this.userRepository.findOne({ where: { email } });
-  }
+  // ===================== PASSWORD RESET =========================
 
   async requestPasswordReset(email: string) {
     const user = await this.userRepository.findOne({ where: { email } });
     if (!user) throw new BadRequestException('Email không tồn tại');
 
-    const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const resetCode = Math.floor(
+      100000 + Math.random() * 900000,
+    ).toString();
     const codeExpired = dayjs().add(10, 'minutes').toDate();
 
     await this.userRepository.update(user.id, {
-      resetCode,
-      resetCodeExpire: codeExpired,
+      reset_password_token: resetCode,
+      reset_password_token_expiry: codeExpired,
     });
 
     await this.mailerService.sendMail({
       to: email,
       subject: 'Mã xác nhận đặt lại mật khẩu',
       template: 'reset-password-code',
-      context: { name: user.name, code: resetCode },
+      context: { name: user.full_name ?? user.email, code: resetCode },
     });
 
     return { message: 'Đã gửi email reset password' };
@@ -119,23 +160,26 @@ export class UsersService {
 
   async resetPassword(code: string, newPassword: string) {
     const user = await this.userRepository.findOne({
-      where: { resetCode: code },
+      where: { reset_password_token: code },
     });
     if (!user) throw new BadRequestException('Mã xác nhận không hợp lệ');
 
-    if (user.resetCodeExpire < new Date()) {
+    if (user.reset_password_token_expiry < new Date()) {
       throw new BadRequestException('Mã xác nhận đã hết hạn');
     }
 
-    // lấy lại user có password để so sánh
     const userWithPassword = await this.userRepository.findOne({
       where: { id: user.id },
-      select: ['id', 'password'],
+      select: ['id', 'password_hash'],
     });
+
+    if (!userWithPassword) {
+      throw new NotFoundException('Người dùng không tồn tại');
+    }
 
     const isSame = await comparePasswordHelper(
       newPassword,
-      userWithPassword.password,
+      userWithPassword.password_hash,
     );
     if (isSame) {
       throw new BadRequestException(
@@ -145,111 +189,150 @@ export class UsersService {
 
     const hashed = await hashPasswordHelper(newPassword);
     await this.userRepository.update(user.id, {
-      password: hashed,
-      resetCode: null,
-      resetCodeExpire: null,
+      password_hash: hashed,
+      reset_password_token: null,
+      reset_password_token_expiry: null,
     });
 
     return { message: 'Đổi mật khẩu thành công' };
   }
 
-  // ✅ ĐÃ CHUYỂN từ userModel.findByIdAndUpdate sang TypeORM
+  // ================= CHANGE PASSWORD (ĐANG LOGIN) ===============
+
+  async changePassword(
+    userId: string,
+    oldPassword: string,
+    newPassword: string,
+    confirmNewPassword: string,
+  ) {
+    if (newPassword !== confirmNewPassword) {
+      throw new BadRequestException('Mật khẩu xác nhận không khớp');
+    }
+
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      select: ['id', 'password_hash'],
+    });
+
+    if (!user) {
+      throw new NotFoundException('Người dùng không tồn tại');
+    }
+
+    const isOldCorrect = await comparePasswordHelper(
+      oldPassword,
+      user.password_hash,
+    );
+    if (!isOldCorrect) {
+      throw new BadRequestException('Mật khẩu cũ không chính xác');
+    }
+
+    const isSame = await comparePasswordHelper(
+      newPassword,
+      user.password_hash,
+    );
+    if (isSame) {
+      throw new BadRequestException(
+        'Mật khẩu mới không được trùng với mật khẩu cũ',
+      );
+    }
+
+    const hashed = await hashPasswordHelper(newPassword);
+
+    await this.userRepository.update(user.id, {
+      password_hash: hashed,
+    });
+
+    return { message: 'Đổi mật khẩu thành công' };
+  }
+
+  // ===================== REFRESH TOKEN ==========================
+
   async saveRefreshToken(
     userId: string,
     refreshToken: string,
     expiry: Date,
   ) {
     await this.userRepository.update(userId, {
-      refreshToken,
-      refreshTokenExpiry: expiry,
+      refresh_token: refreshToken,
+      refresh_token_expiry: expiry,
     });
     return this.userRepository.findOne({ where: { id: userId } });
   }
 
-  // ✅ Thêm hàm xoá refresh token để dùng khi logout
   async removeRefreshToken(userId: string) {
     await this.userRepository.update(userId, {
-      refreshToken: null,
-      refreshTokenExpiry: null,
+      refresh_token: null,
+      refresh_token_expiry: null,
     });
   }
 
-  // 👉 Dùng codeId + codeExpired làm activation token
+  // ==================== ACCOUNT ACTIVATION ======================
+
   async updateActivationToken(
     userId: string,
     token: string,
     expiry: Date,
   ) {
     await this.userRepository.update(userId, {
-      codeId: token,
-      codeExpired: expiry,
+      activation_token: token,
+      activation_token_expiry: expiry,
     });
   }
 
   async findByActivationToken(token: string) {
-    return await this.userRepository.findOne({
-      where: { codeId: token },
+    return this.userRepository.findOne({
+      where: { activation_token: token },
     });
   }
 
   async activateUser(userId: string) {
     await this.userRepository.update(userId, {
-      isActive: true,
-      codeId: null,
-      codeExpired: null,
+      is_active: true,
+      activation_token: null,
+      activation_token_expiry: null,
     });
   }
 
-  // Hàm register cũ của bạn – có thể giữ lại nếu còn dùng
-// hoặc giữ uuidv4 cũng được, tuỳ bạn
+  // ======================== REGISTER ============================
 
-// ...
+  async handleRegister(dto: CreateAuthDto) {
+    const { name, email, password } = dto;
 
-async handleRegister(dto: CreateAuthDto) {
-  const { name, email, password } = dto;
+    const isExist = await this.isEmailExist(email);
+    if (isExist) throw new BadRequestException('Email đã tồn tại');
 
-  const isExist = await this.isEmailExist(email);
-  if (isExist) throw new BadRequestException('Email đã tồn tại');
+    const hashed = await hashPasswordHelper(password);
+    const activationToken = randomBytes(32).toString('hex');
 
-  const hashed = await hashPasswordHelper(password);
+    const user = this.userRepository.create({
+      full_name: name,
+      email,
+      password_hash: hashed,
+      is_active: false,
+      activation_token: activationToken,
+      activation_token_expiry: dayjs().add(30, 'minutes').toDate(),
+    });
 
-  // Bạn có thể dùng uuidv4 như cũ:
-  // const codeId = uuidv4();
+    await this.userRepository.save(user);
 
-  // Hoặc dùng token random 32 bytes:
-  const codeId = randomBytes(32).toString('hex');
+    const baseUrl =
+      process.env.FRONTEND_URL ||
+      process.env.BACKEND_URL ||
+      'http://localhost:3000';
 
-  const user = this.userRepository.create({
-    name,
-    email,
-    password: hashed,
-    isActive: false,
-    codeId,                                      // lưu token vào codeId
-    codeExpired: dayjs().add(30, 'minutes').toDate(), // hết hạn sau 30 phút
-  });
+    const activationUrl = `${baseUrl}/auth/activate?token=${activationToken}`;
 
-  await this.userRepository.save(user);
+    await this.mailerService.sendMail({
+      to: user.email,
+      subject: 'Kích hoạt tài khoản LMS',
+      template: 'register',
+      context: {
+        name: user.full_name ?? user.email,
+        activationCode: activationToken,
+        activationUrl,
+      },
+    });
 
-  // 🔗 Tạo link kích hoạt
-  const baseUrl =
-    process.env.FRONTEND_URL ||
-    process.env.BACKEND_URL ||
-    'http://localhost:3000';
-
-  const activationUrl = `${baseUrl}/auth/activate?token=${codeId}`;
-
-  await this.mailerService.sendMail({
-    to: user.email,
-    subject: 'Activate your account at @trungkien',
-    template: 'register', // hoặc 'activation' tùy bạn
-    context: {
-      name: user.name ?? user.email,
-      activationCode: codeId,   // nếu template vẫn muốn hiển thị mã
-      activationUrl,            // để user chỉ cần bấm link
-    },
-  });
-
-  return { _id: user.id };
-}
-
+    return { _id: user.id };
+  }
 }

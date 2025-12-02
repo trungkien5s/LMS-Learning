@@ -1,23 +1,25 @@
-import { IsOptional, IsString, IsIn, IsUUID, IsNotEmpty } from 'class-validator';
+import { IsOptional, IsString, Matches, MaxLength, MinLength } from "class-validator";
 
+// src/modules/users/dto/update-user.dto.ts
 export class UpdateUserDto {
-  @IsUUID('4', { message: 'ID không hợp lệ (UUID v4)' })
-  @IsNotEmpty({ message: 'ID không được để trống' })
-  id: string;
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(255)
+  full_name?: string;
 
   @IsOptional()
-  name?: string;
-
-  @IsOptional()
+  @IsString()
+  @Matches(/^[0-9]{10,11}$/)
   phone?: string;
 
   @IsOptional()
+  @IsString()
   address?: string;
 
   @IsOptional()
-  image?: string;
+  @IsString()
+  avatar_url?: string;
 
-  @IsOptional()
-  @IsIn(['USERS', 'ADMIN'], { message: 'Role phải là USERS hoặc ADMIN' })
-  role?: string;
+  // ⚠️ KHÔNG cho update: email, password, role, account_type
 }
