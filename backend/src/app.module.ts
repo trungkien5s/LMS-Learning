@@ -12,36 +12,43 @@ import { APP_GUARD } from '@nestjs/core';
 import { MailerModule } from '@nestjs-modules/mailer';
 import { HandlebarsAdapter } from '@nestjs-modules/mailer/dist/adapters/handlebars.adapter';
 import { TransformInterceptor } from '@/core/transform.interceptor';
+import { QuizzesModule } from './modules/quizzes/quiz.module';
+import { Question } from './modules/questions/entities/question.entity';
+import { QuestionsModule } from './modules/questions/question.module';
+import { NotificationsModule } from './modules/notifications/notification.module';
+import { Lesson } from './modules/lessons/entities/lesson.entity';
+import { LessonsModule } from './modules/lessons/lessons.module';
+import { EnrollmentsModule } from './modules/enrollments/enrollments.module';
+import { DiscussionsModule } from './modules/discussions/discussions.module';
+import { CoursesModule } from './modules/courses/course.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
 
-    // ✅ PostgreSQL + TypeORM config
-// app.module.ts
-TypeOrmModule.forRootAsync({
-  imports: [ConfigModule],
-  useFactory: async (configService: ConfigService) => ({
-    type: 'postgres',
-    host: configService.get<string>('POSTGRES_HOST'),
-    port: +configService.get<number>('POSTGRES_PORT'),
-    username: configService.get<string>('POSTGRES_USER'),
-    password: configService.get<string>('POSTGRES_PASSWORD'),
-    database: configService.get<string>('POSTGRES_DB'),
-    autoLoadEntities: true,
-    synchronize: false, 
-    ssl: {
-      rejectUnauthorized: false
-    },
-    logging: true,
-    extra: {
-      max: 20,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 2000,
-    }
-  }),
-  inject: [ConfigService],
-}),
+    TypeOrmModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: async (configService: ConfigService) => ({
+        type: 'postgres',
+        host: configService.get<string>('POSTGRES_HOST'),
+        port: +configService.get<number>('POSTGRES_PORT'),
+        username: configService.get<string>('POSTGRES_USER'),
+        password: configService.get<string>('POSTGRES_PASSWORD'),
+        database: configService.get<string>('POSTGRES_DB'),
+        autoLoadEntities: true,
+        synchronize: false,     
+        logging: true,
+        ssl: {
+          rejectUnauthorized: false,
+        },
+        extra: {
+          max: 20,
+          idleTimeoutMillis: 30000,
+          connectionTimeoutMillis: 2000,
+        },
+      }),
+      inject: [ConfigService],
+    }),
     MailerModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
@@ -71,6 +78,14 @@ TypeOrmModule.forRootAsync({
 
     AuthModule,
     UsersModule,
+    QuizzesModule,
+    QuestionsModule,
+    NotificationsModule,
+    LessonsModule,
+    EnrollmentsModule,
+    DiscussionsModule,
+    CoursesModule
+    
   ],
   controllers: [AppController],
   providers: [
