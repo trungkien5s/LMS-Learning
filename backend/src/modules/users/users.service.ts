@@ -245,6 +245,13 @@ export class UsersService {
     return { message: 'Đổi mật khẩu thành công' };
   }
 
+  // src/modules/users/users.service.ts
+async findByRefreshToken(refreshToken: string): Promise<User | null> {
+  return this.userRepository.findOne({
+    where: { refresh_token: refreshToken },
+  });
+}
+
   // ===================== REFRESH TOKEN ==========================
 
   async saveRefreshToken(

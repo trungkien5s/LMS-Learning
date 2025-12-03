@@ -128,11 +128,12 @@ export class AuthService {
   // =====================================================
   // REFRESH TOKEN
   // =====================================================
-  async refreshToken(
-    userId: string,
-    refreshToken: string,
-  ): Promise<RefreshTokenResult> {
-    const user = await this.usersService.findById(userId);
+    // =====================================================
+  // REFRESH TOKEN (dùng cookie, không cần userId)
+  // =====================================================
+  async refreshToken(refreshToken: string): Promise<RefreshTokenResult> {
+    // 👉 Cần implement findByRefreshToken trong UsersService
+    const user = await this.usersService.findByRefreshToken(refreshToken);
 
     if (
       !user ||
@@ -158,6 +159,7 @@ export class AuthService {
 
     return { access_token: accessToken };
   }
+
 
   // =====================================================
   // REGISTER (uỷ quyền cho UsersService.handleRegister)
@@ -246,8 +248,7 @@ export class AuthService {
   ): Promise<void> {
     const activationUrl = `${
       process.env.FRONTEND_URL ||
-      process.env.BACKEND_URL ||
-      'http://localhost:3000'
+      process.env.PORT 
     }/auth/activate?token=${token}`;
 
     await this.mailerService.sendMail({

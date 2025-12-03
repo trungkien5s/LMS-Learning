@@ -7,7 +7,11 @@ import {
   Request,
   UseGuards,
   Query,
+  Req,
+  Res,
+  UnauthorizedException,
 } from '@nestjs/common';
+import { Response, Request as ExpressRequest } from 'express';
 import { CreateAuthDto } from './dto/create-auth.dto';
 import {
   AuthService,
@@ -30,8 +34,25 @@ import {
 } from '@nestjs/swagger';
 import { LoginAuthDto } from './dto/login-auth.dto';
 
+const REFRESH_TOKEN_COOKIE_NAME = 'refresh_token';
+
+const refreshTokenCookieOptions = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production', // dev có thể false
+  sameSite: 'strict' as const,
+  path: '/auth/refresh-token', // chỉ gửi kèm khi gọi endpoint này
+  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 ngày
+};
+
+// class LoginResponseDto {
 class LoginResponseDto {
   access_token: string;
+  user: {
+    _id: string;
+    email: string;
+    name: string;
+    role: string;
+  };
 }
 
 class MessageResponseDto {
@@ -56,9 +77,26 @@ export class AuthController {
     description: 'Login successful',
     type: LoginResponseDto,
   })
-  handleLogin(@Request() req): Promise<LoginResult> {
-    return this.authService.login(req.user);
+  async handleLogin(
+    @Request() req,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<LoginResponseDto> {
+    const result = await this.authService.login(req.user);
+
+ 
+    res.cookie(
+      REFRESH_TOKEN_COOKIE_NAME,
+      result.refresh_token,
+      refreshTokenCookieOptions,
+    );
+
+
+    return {
+      access_token: result.access_token,
+      user: result.user,
+    };
   }
+
 
   @Post('refresh-token')
   @Public()
@@ -80,7 +118,7 @@ export class AuthController {
   async refreshAccessToken(
     @Body() body: { userId: string; refreshToken: string },
   ): Promise<RefreshTokenResult> {
-    return this.authService.refreshToken(body.userId, body.refreshToken);
+    return this.authService.refreshToken(body.refreshToken);
   }
 
   @Post('register')
@@ -139,7 +177,7 @@ export class AuthController {
     return this.authService.resendActivationLink(body.email);
   }
 
-  @Post('logout')
+    @Post('logout')
   @UseGuards(JwtAuthGuard)
   @ResponseMessage('Logout successfully')
   @ApiOperation({ summary: 'Logout' })
@@ -148,7 +186,18 @@ export class AuthController {
     description: 'Logout successful',
     type: MessageResponseDto,
   })
-  logout(@Request() req): Promise<LogoutResult> {
-    return this.authService.logout(req.user);
+  async logout(
+    @Request() req,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<LogoutResult> {
+    const result = await this.authService.logout(req.user);
+
+    // 👉 Xóa cookie refresh token
+    res.clearCookie(REFRESH_TOKEN_COOKIE_NAME, {
+      path: refreshTokenCookieOptions.path,
+    });
+
+    return result;
   }
+
 }
